@@ -1,6 +1,6 @@
 .PHONY: both cov clean
 
-MUSL_BASE = ../musl-printf-standalone
+MUSL_BASE = ./musl-printf-standalone
 MUSL_EXCLUDE = test-printf.c
 MUSL_LOCAL = musl
 
