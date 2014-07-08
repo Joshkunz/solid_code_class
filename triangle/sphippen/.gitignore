@@ -1,7 +1,0 @@
-.DS_Store
-triangle
-*.gcov
-*.gcda
-*.gcno
-*.dSYM/
-testresults*.txt
