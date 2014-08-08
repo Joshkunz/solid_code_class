@@ -9,7 +9,6 @@
 #include "header.h"
 #include "tree.h"
 #include "encoder.h"
-#include "rle.h"
 
 /* Build a frequency table from the given file. Byte frequencies are filled
  * into the supplied 'table', and the size of the file is written into 'length'.
@@ -28,7 +27,6 @@ static int build_freqtable(FILE * input, uint64_t table[256], uint64_t *length) 
     if (! feof(input)) { return ENOREAD; }
 
     *length = bytes_read;
-    
     return 0;
 }
 
@@ -52,7 +50,7 @@ static int compress_file(FILE * output, FILE * input, struct huff_header * heade
     }
 
     if (! feof(input)) { return ETRUNC; }
-    
+
     /* If there's an extra byte to be written, write it out. Fail with ENOWRITE
      * if the write fails */
     if (encoder.buffer_used &&
@@ -63,62 +61,35 @@ static int compress_file(FILE * output, FILE * input, struct huff_header * heade
     return 0;
 }
 
-/* Use RLE encoding to create new rle-encoded file
- * from parameter 'file'. */
-static int create_rle_file(FILE * file, FILE * rle_encoded) {
-    // Compress input file into temporary file.
-    compress_rle(file, rle_encoded);
-    
-    // Rewind file pointer.
-    if (fseek(rle_encoded, 0L, SEEK_SET)) {
-        return HUFF_FAILURE;
-    }
-    else {
-        return HUFF_SUCCESS;
-    }
-}
-
 static int compress(FILE * file, char * filename) {
     uint64_t ftable[256];
     struct huff_header header;
     char * huff_filename = NULL;
     FILE * output = NULL;
-    
-    /* Open a temp file to store rle encodings. */
-    FILE * rle_encoded = tmpfile();
-    if (!rle_encoded) { return HUFF_FAILURE; }
-    /* Compress 'file' into an rle_encoded file. */
-    int code = create_rle_file(file, rle_encoded);
-    if (code != 0) { return code; }
-    
-    /* Build filename. */
+
     huff_filename = xmalloc(strlen(filename) + HUFF_EXTLEN + 1);
     memcpy(huff_filename, filename, strlen(filename) + 1);
     strcat(huff_filename, HUFF_EXT);
-    if (strlen(huff_filename) != strlen(filename) + HUFF_EXTLEN) {
-        fprintf(stderr, "Likely memory corruption building compression output file name.\n");
-        return HUFF_FAILURE;
-    }
+
+    assert(strlen(huff_filename) == strlen(filename) + HUFF_EXTLEN &&
+           "Likely memory corruption building compression output file name");
+
     output = xfopen(huff_filename, "w");
     free(huff_filename);
 
     /* build our translation table and header, then seek to the
      * start of the file */
-    build_freqtable(rle_encoded, ftable, &header.length);
+    build_freqtable(file, ftable, &header.length);
     huff_make_table(ftable, header.table);
-    code = compress_file(output, rle_encoded, &header);
+
+    int code = compress_file(output, file, &header);
+
     huff_free_hdrtable(&header);
 
-    /* Close output file. */
+    /* close our files */
     if (pfclose(output)) {
         return HUFF_FAILURE;
-    }
-    /* Close temp file. */
-    if (pfclose(rle_encoded)) {
-        return HUFF_FAILURE;
-    }
-    /* Check for compression failure. */
-    if (code) {
+    } else if (code) {
         printf("%s\n", huff_error(code));
         return HUFF_FAILURE;
     }
@@ -154,7 +125,7 @@ static int decompress_file(FILE * output, FILE * input, struct huff_header * hea
 
 static int decompress(FILE * file, char * filename) {
     struct huff_header header;
-    FILE * huff_output = NULL;
+    FILE * output = NULL;
     char * ext_index = NULL;
 
     int code = huff_read_header(file, filename, &header);
@@ -165,42 +136,23 @@ static int decompress(FILE * file, char * filename) {
         return HUFF_FAILURE;
     }
 
-    /* Find index of filename extension. */
     ext_index = filename + (strlen(filename) - HUFF_EXTLEN);
-    if (ext_index > filename && strcmp(ext_index, HUFF_EXT) != 0) {
-        fprintf(stderr, "Our file to decompress does not have a .hurl extension.\n");
-        return HUFF_FAILURE;
-    }
-    /* Remove the .hurl extension */
+    assert(ext_index > filename && strcmp(ext_index, HUFF_EXT) == 0 &&
+           "Our file to decompress does not have a .huff extension.");
+    /* Remove the extension */
     *ext_index = '\0';
 
-    /* Open file for huffman decompression. */
-    huff_output = tmpfile();
-    if (!huff_output) { return HUFF_FAILURE; }
-    code = decompress_file(huff_output, file, &header);
-    huff_free_hdrtable(&header);
-    
-    /* Rewind rle file pointer. */
-    if (fseek(huff_output, 0L, SEEK_SET)) {
-        return HUFF_FAILURE;
-    }
+    output = xfopen(filename, "w");
+    code = decompress_file(output, file, &header);
 
-    /* Send huffman decompressed file through rle decompression. */
-    FILE * rle_output = xfopen(filename, "wb");
-    decompress_rle(huff_output, rle_output);
-    
-    /* Close temp file */
-    if (pfclose(huff_output)) {
-        return HUFF_FAILURE;
-    }
-    /* Close final decoded file. */
-    if (pfclose(rle_output)) {
-        return HUFF_FAILURE;
-    }
+    huff_free_hdrtable(&header);
+
+    if (pfclose(output)) { return HUFF_FAILURE; }
     if (code != 0) {
         fprintf(stderr, "Couldn't decompress: %s\n", huff_error(code));
         return HUFF_FAILURE;
     }
+
     return HUFF_SUCCESS;
 }
 
@@ -222,7 +174,7 @@ static int table(FILE * file, char * filename) {
 }
 
 static void usage(FILE * to) {
-    fputs("usage: rhuff [-t | -c | -d] FILE\n"
+    fputs("usage: huff [-t | -c | -d] FILE\n"
           "Arguments:\n"
           " -c      Compress the given file.\n"
           " -d      Decompress the given file.\n"

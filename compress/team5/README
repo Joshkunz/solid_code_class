@@ -1,2 +1,0 @@
-The provided makefile builds the huff executable. Typing "make" with compile any and all c source files in the directory.
-
